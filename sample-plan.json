@@ -1,0 +1,41 @@
+{
+  "name": "Sample Plan (edit or replace me)",
+  "scheduleNote": "Example: 3x per week, at least one rest day between sessions.",
+  "cardioNote": "Optional, doesn't take priority over recovery.",
+  "warmup": [
+    "5 min easy cardio (bike, row erg, walk)",
+    "Ramp into your first compound lift: empty/light x10 → ~50% working weight x5 → ~75% x3 → working sets",
+    "Pure accessories: skip the ramp, go straight to working weight"
+  ],
+  "progressionRule": [
+    "All sets hit the top of the rep range, clean form → add weight next session (smallest available increment).",
+    "Some sets hit it, some don't → repeat the same weight.",
+    "Miss the bottom of the rep range on any set → repeat the same weight. Miss it two sessions in a row → drop weight ~10% and rebuild."
+  ],
+  "deloadNote": "Every 4th week: same exercises, ~50% working weight, same reps.",
+  "watchList": [
+    "This is a good place to note anything you want the app to remind you about — e.g. \"if X starts hurting, swap it.\""
+  ],
+  "exerciseNotes": {
+    "Goblet Squat": "Dumbbell held vertically at chest, squat between your legs.",
+    "Romanian Deadlift": "Hip hinge (push hips back), not a squat."
+  },
+  "days": [
+    {
+      "label": "Day A",
+      "exercises": [
+        { "id": "a_squat", "name": "Goblet Squat", "sets": 3, "repLow": 6, "repHigh": 8, "rest": 120, "type": "weight", "compound": true, "note": "" },
+        { "id": "a_pushup", "name": "Push-Up", "sets": 3, "repLow": 8, "repHigh": 12, "rest": 90, "type": "weight", "note": "" },
+        { "id": "a_plank", "name": "Plank", "sets": 3, "repLow": 30, "repHigh": 45, "rest": 60, "type": "time", "note": "" }
+      ]
+    },
+    {
+      "label": "Day B",
+      "exercises": [
+        { "id": "b_rdl", "name": "Romanian Deadlift", "sets": 3, "repLow": 6, "repHigh": 8, "rest": 120, "type": "weight", "compound": true, "note": "Start light." },
+        { "id": "b_row", "name": "Dumbbell Row", "sets": 3, "repLow": 8, "repHigh": 10, "rest": 90, "type": "weight", "note": "" },
+        { "id": "b_carry", "name": "Farmer's Carry", "sets": 3, "repLow": 30, "repHigh": 30, "rest": 60, "type": "carry", "note": "" }
+      ]
+    }
+  ]
+}
