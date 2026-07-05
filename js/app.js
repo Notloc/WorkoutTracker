@@ -184,6 +184,72 @@ document.getElementById("restSkipBtn").addEventListener("click", () => {
   restEl.classList.add("hidden");
 });
 
+// ---------- Hold timer (for time-based exercises like planks) ----------
+const holdEl = document.getElementById("holdTimer");
+const holdClockEl = document.getElementById("holdClock");
+const holdLabelEl = document.getElementById("holdLabel");
+const holdStopBtn = document.getElementById("holdStopBtn");
+let holdInterval = null;
+let holdPhase = null; // "countdown" | "running"
+let holdCountdown = 3;
+let holdElapsed = 0;
+let holdTargetEx = null;
+let holdTargetSet = null;
+let holdTargetHigh = null;
+let holdVibratedAtTarget = false;
+
+function startHoldTimer(exId, setIndex, label, targetHigh) {
+  clearInterval(holdInterval);
+  holdTargetEx = exId;
+  holdTargetSet = setIndex;
+  holdTargetHigh = targetHigh;
+  holdPhase = "countdown";
+  holdCountdown = 3;
+  holdVibratedAtTarget = false;
+  holdLabelEl.textContent = label;
+  holdClockEl.textContent = String(holdCountdown);
+  holdStopBtn.textContent = "Cancel";
+  holdEl.classList.remove("hidden");
+  vibrate(60);
+  holdInterval = setInterval(() => {
+    if (holdPhase === "countdown") {
+      holdCountdown -= 1;
+      if (holdCountdown <= 0) {
+        holdPhase = "running";
+        holdElapsed = 0;
+        holdClockEl.textContent = "0s";
+        holdStopBtn.textContent = "Stop & Log";
+        vibrate(120);
+      } else {
+        holdClockEl.textContent = String(holdCountdown);
+        vibrate(60);
+      }
+    } else {
+      holdElapsed += 1;
+      holdClockEl.textContent = holdElapsed + "s";
+      if (!holdVibratedAtTarget && holdTargetHigh && holdElapsed >= holdTargetHigh) {
+        holdVibratedAtTarget = true;
+        vibrate([60, 60, 60]);
+      }
+    }
+  }, 1000);
+}
+
+function stopHoldTimer() {
+  clearInterval(holdInterval);
+  holdEl.classList.add("hidden");
+  if (holdPhase === "running") {
+    const input = document.querySelector(`.set-input[data-ex="${holdTargetEx}"][data-set="${holdTargetSet}"]`);
+    if (input) {
+      input.value = holdElapsed;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  }
+  holdPhase = null;
+}
+
+holdStopBtn.addEventListener("click", stopHoldTimer);
+
 // ---------- Rendering ----------
 const appEl = document.getElementById("app");
 const tabbarEl = document.getElementById("tabbar");
@@ -295,12 +361,16 @@ function renderExerciseCard(ex, deload) {
 
   const setCells = Array.from({ length: ex.sets }).map((_, i) => {
     const def = ex.repHigh;
+    const timerBtn = isTime ? `
+        <button class="set-timer-btn" type="button" data-ex="${ex.id}" data-set="${i}" data-high="${ex.repHigh}"
+          data-label="${ex.name} · Set ${i + 1}">⏱ Time it</button>` : "";
     return `
       <div class="set-cell">
         <label>Set ${i + 1}</label>
         <input class="set-input" type="number" inputmode="numeric" data-ex="${ex.id}" data-set="${i}"
           data-low="${ex.repLow}" data-high="${ex.repHigh}"
           placeholder="${def}" />
+        ${timerBtn}
       </div>`;
   }).join("");
 
@@ -574,6 +644,12 @@ function attachHandlers() {
   document.querySelectorAll("[data-rest]").forEach(btn => {
     btn.addEventListener("click", () => {
       startRest(Number(btn.dataset.rest), btn.dataset.restlabel);
+    });
+  });
+
+  document.querySelectorAll(".set-timer-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      startHoldTimer(btn.dataset.ex, Number(btn.dataset.set), btn.dataset.label, Number(btn.dataset.high));
     });
   });
 

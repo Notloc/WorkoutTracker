@@ -155,6 +155,18 @@ h1, h2, h3 { margin: 0 0 4px; font-weight: 650; }
 .set-input.hit { border-color: var(--accent); }
 .set-input.miss { border-color: var(--bad); }
 
+.set-timer-btn {
+  width: 100%;
+  margin-top: 6px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  color: var(--accent);
+  border-radius: 8px;
+  padding: 6px 0;
+  font-size: 13px;
+}
+.set-timer-btn:active { transform: scale(0.97); }
+
 .ex-footer {
   display: flex;
   align-items: center;
@@ -302,6 +314,8 @@ textarea.data-box {
   padding: 0 12px 8px;
 }
 .rest-timer.hidden { display: none; }
+.hold-timer { bottom: calc(128px + env(safe-area-inset-bottom)); }
+.hold-timer .rest-timer-inner { border-color: var(--warn); }
 .rest-timer-inner {
   max-width: 560px;
   margin: 0 auto;
