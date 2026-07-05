@@ -189,6 +189,7 @@ const holdEl = document.getElementById("holdTimer");
 const holdClockEl = document.getElementById("holdClock");
 const holdLabelEl = document.getElementById("holdLabel");
 const holdStopBtn = document.getElementById("holdStopBtn");
+const holdGoalBtn = document.getElementById("holdGoalBtn");
 let holdInterval = null;
 let holdPhase = null; // "countdown" | "running"
 let holdCountdown = 3;
@@ -196,7 +197,7 @@ let holdElapsed = 0;
 let holdTargetEx = null;
 let holdTargetSet = null;
 let holdTargetHigh = null;
-let holdVibratedAtTarget = false;
+let holdPastTarget = false;
 
 function startHoldTimer(exId, setIndex, label, targetHigh) {
   clearInterval(holdInterval);
@@ -205,10 +206,11 @@ function startHoldTimer(exId, setIndex, label, targetHigh) {
   holdTargetHigh = targetHigh;
   holdPhase = "countdown";
   holdCountdown = 3;
-  holdVibratedAtTarget = false;
+  holdPastTarget = false;
   holdLabelEl.textContent = label;
   holdClockEl.textContent = String(holdCountdown);
   holdStopBtn.textContent = "Cancel";
+  holdGoalBtn.classList.add("hidden");
   holdEl.classList.remove("hidden");
   vibrate(60);
   holdInterval = setInterval(() => {
@@ -227,28 +229,40 @@ function startHoldTimer(exId, setIndex, label, targetHigh) {
     } else {
       holdElapsed += 1;
       holdClockEl.textContent = holdElapsed + "s";
-      if (!holdVibratedAtTarget && holdTargetHigh && holdElapsed >= holdTargetHigh) {
-        holdVibratedAtTarget = true;
+      if (!holdPastTarget && holdTargetHigh && holdElapsed >= holdTargetHigh) {
+        holdPastTarget = true;
         vibrate([60, 60, 60]);
+        holdStopBtn.textContent = "Log Full";
+        holdGoalBtn.textContent = `Log ${holdTargetHigh}`;
+        holdGoalBtn.classList.remove("hidden");
       }
     }
   }, 1000);
 }
 
-function stopHoldTimer() {
+function logHoldValue(value) {
   clearInterval(holdInterval);
   holdEl.classList.add("hidden");
-  if (holdPhase === "running") {
-    const input = document.querySelector(`.set-input[data-ex="${holdTargetEx}"][data-set="${holdTargetSet}"]`);
-    if (input) {
-      input.value = holdElapsed;
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    }
+  const input = document.querySelector(`.set-input[data-ex="${holdTargetEx}"][data-set="${holdTargetSet}"]`);
+  if (input) {
+    input.value = value;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
   }
   holdPhase = null;
 }
 
+function stopHoldTimer() {
+  if (holdPhase === "running") {
+    logHoldValue(holdElapsed);
+  } else {
+    clearInterval(holdInterval);
+    holdEl.classList.add("hidden");
+    holdPhase = null;
+  }
+}
+
 holdStopBtn.addEventListener("click", stopHoldTimer);
+holdGoalBtn.addEventListener("click", () => logHoldValue(holdTargetHigh));
 
 // ---------- Rendering ----------
 const appEl = document.getElementById("app");

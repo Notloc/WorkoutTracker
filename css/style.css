@@ -325,7 +325,8 @@ textarea.data-box {
   padding: 10px 14px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 8px 12px;
   box-shadow: 0 6px 20px rgba(0,0,0,0.4);
 }
 .rest-label { font-size: 13px; color: var(--text-dim); flex: none; }
