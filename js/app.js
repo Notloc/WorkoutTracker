@@ -145,46 +145,55 @@ function beep() {
 }
 
 // ---------- Rest timer ----------
+// Driven by a target timestamp (restEndAt) rather than a decrementing counter,
+// so the displayed time stays correct even if the interval is throttled or
+// suspended while the app is backgrounded.
 const restEl = document.getElementById("restTimer");
 const restClockEl = document.getElementById("restClock");
 const restLabelEl = document.getElementById("restLabel");
 let restInterval = null;
-let restRemaining = 0;
+let restEndAt = 0;
 
 function startRest(seconds, label) {
   clearInterval(restInterval);
-  restRemaining = seconds;
+  restEndAt = Date.now() + seconds * 1000;
   restLabelEl.textContent = label || "Rest";
   updateRestClock();
   restEl.classList.remove("hidden");
-  restInterval = setInterval(() => {
-    restRemaining -= 1;
-    if (restRemaining <= 0) {
-      clearInterval(restInterval);
-      restRemaining = 0;
-      updateRestClock();
-      vibrate([200, 100, 200]);
-      beep();
-      setTimeout(() => restEl.classList.add("hidden"), 1500);
-      return;
-    }
+  restInterval = setInterval(tickRest, 250);
+}
+
+function tickRest() {
+  const remaining = Math.round((restEndAt - Date.now()) / 1000);
+  if (remaining <= 0) {
+    clearInterval(restInterval);
+    restEndAt = Date.now();
     updateRestClock();
-  }, 1000);
+    vibrate([200, 100, 200]);
+    beep();
+    setTimeout(() => restEl.classList.add("hidden"), 1500);
+    return;
+  }
+  updateRestClock();
 }
 
 function updateRestClock() {
-  const mm = Math.floor(restRemaining / 60);
-  const ss = restRemaining % 60;
+  const remaining = Math.max(0, Math.round((restEndAt - Date.now()) / 1000));
+  const mm = Math.floor(remaining / 60);
+  const ss = remaining % 60;
   restClockEl.textContent = mm + ":" + String(ss).padStart(2, "0");
 }
 
-document.getElementById("restAddBtn").addEventListener("click", () => { restRemaining += 15; updateRestClock(); });
+document.getElementById("restAddBtn").addEventListener("click", () => { restEndAt += 15000; updateRestClock(); });
 document.getElementById("restSkipBtn").addEventListener("click", () => {
   clearInterval(restInterval);
   restEl.classList.add("hidden");
 });
 
 // ---------- Hold timer (for time-based exercises like planks) ----------
+// Driven by timestamps (holdPhaseEndAt / holdStartAt) rather than a
+// per-tick counter, so it stays accurate even if the interval is throttled
+// or suspended while the app is backgrounded.
 const holdEl = document.getElementById("holdTimer");
 const holdClockEl = document.getElementById("holdClock");
 const holdLabelEl = document.getElementById("holdLabel");
@@ -192,8 +201,10 @@ const holdStopBtn = document.getElementById("holdStopBtn");
 const holdGoalBtn = document.getElementById("holdGoalBtn");
 let holdInterval = null;
 let holdPhase = null; // "countdown" | "running"
-let holdCountdown = 3;
-let holdElapsed = 0;
+let holdPhaseEndAt = 0; // countdown target timestamp
+let holdStartAt = 0; // running phase start timestamp
+let holdCountdown = 3; // last displayed countdown value
+let holdElapsed = 0; // last displayed elapsed seconds
 let holdTargetEx = null;
 let holdTargetSet = null;
 let holdTargetHigh = null;
@@ -205,6 +216,7 @@ function startHoldTimer(exId, setIndex, label, targetHigh) {
   holdTargetSet = setIndex;
   holdTargetHigh = targetHigh;
   holdPhase = "countdown";
+  holdPhaseEndAt = Date.now() + 3000;
   holdCountdown = 3;
   holdPastTarget = false;
   holdLabelEl.textContent = label;
@@ -213,21 +225,29 @@ function startHoldTimer(exId, setIndex, label, targetHigh) {
   holdGoalBtn.classList.add("hidden");
   holdEl.classList.remove("hidden");
   vibrate(60);
-  holdInterval = setInterval(() => {
-    if (holdPhase === "countdown") {
-      holdCountdown -= 1;
-      if (holdCountdown <= 0) {
-        holdPhase = "running";
-        holdElapsed = 0;
-        holdClockEl.textContent = "0s";
-        holdStopBtn.textContent = "Stop & Log";
-        vibrate(120);
-      } else {
-        holdClockEl.textContent = String(holdCountdown);
-        vibrate(60);
-      }
-    } else {
-      holdElapsed += 1;
+  holdInterval = setInterval(tickHold, 200);
+}
+
+function tickHold() {
+  const now = Date.now();
+  if (holdPhase === "countdown") {
+    const remaining = Math.ceil((holdPhaseEndAt - now) / 1000);
+    if (remaining <= 0) {
+      holdPhase = "running";
+      holdStartAt = now;
+      holdElapsed = 0;
+      holdClockEl.textContent = "0s";
+      holdStopBtn.textContent = "Stop & Log";
+      vibrate(120);
+    } else if (remaining !== holdCountdown) {
+      holdCountdown = remaining;
+      holdClockEl.textContent = String(holdCountdown);
+      vibrate(60);
+    }
+  } else {
+    const elapsed = Math.floor((now - holdStartAt) / 1000);
+    if (elapsed !== holdElapsed) {
+      holdElapsed = elapsed;
       holdClockEl.textContent = holdElapsed + "s";
       if (!holdPastTarget && holdTargetHigh && holdElapsed >= holdTargetHigh) {
         holdPastTarget = true;
@@ -237,7 +257,7 @@ function startHoldTimer(exId, setIndex, label, targetHigh) {
         holdGoalBtn.classList.remove("hidden");
       }
     }
-  }, 1000);
+  }
 }
 
 function logHoldValue(value) {
@@ -263,6 +283,12 @@ function stopHoldTimer() {
 
 holdStopBtn.addEventListener("click", stopHoldTimer);
 holdGoalBtn.addEventListener("click", () => logHoldValue(holdTargetHigh));
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") return;
+  if (restInterval) tickRest();
+  if (holdInterval) tickHold();
+});
 
 // ---------- Rendering ----------
 const appEl = document.getElementById("app");
