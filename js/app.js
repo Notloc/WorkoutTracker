@@ -93,6 +93,68 @@ function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
+// ---------- In-progress workout draft (autosave) ----------
+// Persists whatever's typed into the Today tab so it survives the page
+// being reloaded or the app process being killed mid-workout, before
+// "Finish Session" ever runs.
+const DRAFT_KEY = "wt_draft_v1";
+
+function loadDraft() {
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return (parsed && typeof parsed.dayIndex === "number") ? parsed : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function saveDraft() {
+  if (!plan || activeTab !== "today") return;
+  const dayIndex = nextDayIndex();
+  const day = plan.days[dayIndex];
+  const weights = {};
+  const sets = {};
+  day.exercises.forEach(ex => {
+    const weightInput = document.getElementById(`w_${ex.id}`);
+    if (weightInput) weights[ex.id] = weightInput.value;
+    const setInputs = Array.from(document.querySelectorAll(`.set-input[data-ex="${ex.id}"]`));
+    sets[ex.id] = setInputs.map(inp => inp.value);
+  });
+  draft = { dayIndex, date: todayISO(), deloadOverride, weights, sets };
+  localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+}
+
+function clearDraft() {
+  draft = null;
+  localStorage.removeItem(DRAFT_KEY);
+}
+
+function restoreDraftIntoToday() {
+  if (!draft || draft.dayIndex !== nextDayIndex()) return;
+  Object.entries(draft.weights || {}).forEach(([exId, val]) => {
+    if (!val) return;
+    const input = document.getElementById(`w_${exId}`);
+    if (input) input.value = val;
+  });
+  Object.entries(draft.sets || {}).forEach(([exId, vals]) => {
+    (vals || []).forEach((val, i) => {
+      if (!val) return;
+      const input = document.querySelector(`.set-input[data-ex="${exId}"][data-set="${i}"]`);
+      if (input) {
+        input.value = val;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    });
+  });
+}
+
+let draft = loadDraft();
+if (plan && draft && draft.dayIndex === nextDayIndex() && typeof draft.deloadOverride === "boolean") {
+  deloadOverride = draft.deloadOverride;
+}
+
 // ---------- Helpers ----------
 function todayISO() {
   const d = new Date();
@@ -306,6 +368,7 @@ function render() {
   else if (activeTab === "history") appEl.innerHTML = renderHistory();
   else appEl.innerHTML = renderSettings();
   attachHandlers();
+  if (activeTab === "today") restoreDraftIntoToday();
 }
 
 function unitLabel() { return state.unit; }
@@ -609,6 +672,7 @@ function finishSession() {
   });
   state.lastDayIndex = dayIndex;
   deloadOverride = null;
+  clearDraft();
   saveState();
   render();
 }
@@ -642,6 +706,7 @@ function attachOnboardingHandlers() {
         .then(p => {
           plan = p;
           savePlan();
+          clearDraft();
           activeTab = "today";
           render();
         })
@@ -664,6 +729,7 @@ function tryImportPlan(text) {
   }
   plan = parsed;
   savePlan();
+  clearDraft();
   activeTab = "today";
   render();
 }
@@ -674,11 +740,17 @@ function attachHandlers() {
       const low = Number(inp.dataset.low);
       const high = Number(inp.dataset.high);
       inp.classList.remove("hit", "miss");
-      if (inp.value === "") return;
-      const v = Number(inp.value);
-      if (v >= high) inp.classList.add("hit");
-      else if (v < low) inp.classList.add("miss");
+      if (inp.value !== "") {
+        const v = Number(inp.value);
+        if (v >= high) inp.classList.add("hit");
+        else if (v < low) inp.classList.add("miss");
+      }
+      saveDraft();
     });
+  });
+
+  document.querySelectorAll(".weight-input").forEach(inp => {
+    inp.addEventListener("input", saveDraft);
   });
 
   document.querySelectorAll("[data-rest]").forEach(btn => {
@@ -697,6 +769,7 @@ function attachHandlers() {
   if (deloadToggle) {
     deloadToggle.addEventListener("change", () => {
       deloadOverride = deloadToggle.checked;
+      saveDraft();
       render();
     });
   }
@@ -769,6 +842,7 @@ function attachHandlers() {
     resetBtn.addEventListener("click", () => {
       if (confirm("This deletes all logged sessions and progression data on this device. Continue?")) {
         state = defaultState();
+        clearDraft();
         saveState();
         render();
       }
