@@ -404,24 +404,27 @@ function render() {
 
 function unitLabel() { return state.unit; }
 
-function renderImportForm(heading, intro) {
+function planFormatPrompt() {
+  return `Generate a workout plan as JSON for this app. Shape:
+
+${JSON.stringify(FORMAT_EXAMPLE, null, 2)}
+
+Only "days" is required (each with a "label" and at least one exercise). Exercise "type" is "weight" (default), "time" (bodyweight, log seconds), or "carry" (loaded, log distance). "id" must be unique and stable within this plan -- it's how the app tracks progression across sessions.`;
+}
+
+function renderImportForm(heading, intro, startOpen) {
   return `
-    <div class="card">
-      <h3>${heading}</h3>
+    <details class="card" ${startOpen ? "open" : ""}>
+      <summary>${heading}</summary>
       ${intro ? `<p>${intro}</p>` : ""}
-      <label class="btn secondary" style="display:block;text-align:center;margin-bottom:8px;cursor:pointer;">
+      <label class="btn secondary" style="display:block;text-align:center;margin:10px 0 8px;cursor:pointer;">
         Choose plan file&hellip;
         <input type="file" accept="application/json,.json" id="planFileInput" style="display:none;" />
       </label>
       <textarea class="data-box" id="planPasteBox" placeholder="...or paste plan JSON here"></textarea>
       <button class="btn secondary" id="planPasteBtn" type="button" style="margin-top:8px;margin-bottom:8px;">Import pasted JSON</button>
+      <button class="btn secondary" id="copyFormatBtn" type="button" style="margin-bottom:8px;">Copy plan format for AI</button>
       <button class="btn" id="loadSampleBtn" type="button">Load sample plan</button>
-    </div>
-    <details class="card">
-      <summary>Plan file format</summary>
-      <p>A plan is a JSON file shaped roughly like this:</p>
-      <pre style="white-space:pre-wrap;font-size:11px;color:var(--text-dim);background:var(--bg-elev-2);padding:10px;border-radius:8px;overflow-x:auto;">${JSON.stringify(FORMAT_EXAMPLE, null, 2)}</pre>
-      <p>Only <code>days</code> is required (each with a <code>label</code> and at least one exercise). Exercise <code>type</code> is <code>weight</code> (default), <code>time</code> (bodyweight, log seconds), or <code>carry</code> (loaded, log distance). <code>id</code> must be unique and stable within this plan — it's how the app tracks progression across sessions. See <code>sample-plan.json</code> in the repo for a full example.</p>
     </details>
   `;
 }
@@ -431,7 +434,8 @@ function renderOnboarding() {
     <div class="page-header"><h1>Lift Log</h1></div>
     ${renderImportForm(
       "Load a plan to get started",
-      "This app doesn't come with a workout plan built in — you bring your own as a JSON file. Import one below, or load the sample to see how it works."
+      "This app doesn't come with a workout plan built in — you bring your own as a JSON file. Import one below, or load the sample to see how it works.",
+      true
     )}
   `;
 }
@@ -634,8 +638,8 @@ function renderLibraryTab() {
 
   return `
     <div class="page-header"><h1>Library</h1><span class="date">${active.length} plan${active.length === 1 ? "" : "s"}</span></div>
-    ${activeCardsHtml}
     ${renderImportForm("Import a plan")}
+    ${activeCardsHtml}
     ${archivedHtml}
   `;
 }
@@ -870,6 +874,18 @@ function attachImportFormHandlers() {
     pasteBtn.addEventListener("click", () => {
       const box = document.getElementById("planPasteBox");
       tryImportPlan(box.value);
+    });
+  }
+
+  const copyFormatBtn = document.getElementById("copyFormatBtn");
+  if (copyFormatBtn) {
+    copyFormatBtn.addEventListener("click", () => {
+      const text = planFormatPrompt();
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(text).then(() => alert("Copied — paste it into an AI chat to generate a plan JSON.")).catch(() => prompt("Copy this:", text));
+      } else {
+        prompt("Copy this:", text);
+      }
     });
   }
 
