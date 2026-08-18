@@ -269,6 +269,8 @@ h1, h2, h3 { margin: 0 0 4px; font-weight: 650; }
 }
 .seg button.active { background: var(--accent); color: #0c1210; font-weight: 650; }
 
+.day-pick-btn.active { border-color: var(--accent); color: var(--accent); }
+
 textarea.data-box {
   width: 100%;
   min-height: 90px;

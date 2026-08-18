@@ -1,5 +1,7 @@
-// ---------- Plan ----------
-const PLAN_KEY = "wt_plan_v1";
+// ---------- Library ----------
+// Plans are an inventory: any number of imported plan JSONs, each kept as its
+// own library entry. Nothing gets replaced on import anymore.
+const LIBRARY_KEY = "wt_library_v1";
 
 const FORMAT_EXAMPLE = {
   name: "My Plan",
@@ -19,20 +21,9 @@ const FORMAT_EXAMPLE = {
   ],
 };
 
-function loadPlan() {
-  try {
-    const raw = localStorage.getItem(PLAN_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    return validatePlan(parsed) ? parsed : null;
-  } catch (e) {
-    return null;
-  }
-}
-
-function savePlan() {
-  if (plan) localStorage.setItem(PLAN_KEY, JSON.stringify(plan));
-  else localStorage.removeItem(PLAN_KEY);
+function genId() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return "p_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
 function validatePlan(p) {
@@ -59,24 +50,46 @@ function validatePlan(p) {
   );
 }
 
-let plan = loadPlan();
+function loadLibrary() {
+  try {
+    const raw = localStorage.getItem(LIBRARY_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter(e => e && e.id && validatePlan(e.plan)) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveLibrary() {
+  localStorage.setItem(LIBRARY_KEY, JSON.stringify(library));
+}
+
+function addPlanToLibrary(planObj) {
+  const entry = { id: genId(), name: planObj.name || "Untitled plan", plan: planObj, addedAt: new Date().toISOString(), archived: false };
+  library.push(entry);
+  saveLibrary();
+  return entry;
+}
+
+function findLibraryEntry(planId) {
+  return library.find(e => e.id === planId) || null;
+}
+
+let library = loadLibrary();
 
 // ---------- State ----------
-const STORAGE_KEY = "wt_state_v1";
+const STORAGE_KEY = "wt_state_v2";
 
 function defaultState() {
   return {
     unit: "kg",
     increment: 2.5,
-    lastDayIndex: -1,
-    exerciseState: {}, // id -> { nextWeight, missStreak, lastActualWeight }
+    exerciseState: {}, // "planId:exerciseId" -> {nextWeight, missStreak, lastActualWeight}
     sessions: [], // newest first
+    lastWorkout: null, // {planId, dayIndex} -- preselect convenience only, never auto-starts
   };
 }
-
-let state = loadState();
-let activeTab = "today";
-let deloadOverride = null; // null = auto, true/false = user forced
 
 function loadState() {
   try {
@@ -93,10 +106,16 @@ function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
-// ---------- In-progress workout draft (autosave) ----------
-// Persists whatever's typed into the Today tab so it survives the page
+let state = loadState();
+let activeTab = "workout";
+let deloadOverride = null; // null = auto, true/false = user forced
+
+// ---------- Active workout (draft: autosave + "what's currently active") ----------
+// Persists whatever's typed into the workout screen so it survives the page
 // being reloaded or the app process being killed mid-workout, before
-// "Finish Session" ever runs.
+// "Finish Session" ever runs. Its mere existence also means "there's an
+// active workout" -- the Workout tab shows a plan/day picker when there's no
+// draft, and the exercise-entry screen when there is one.
 const DRAFT_KEY = "wt_draft_v1";
 
 function loadDraft() {
@@ -104,16 +123,24 @@ function loadDraft() {
     const raw = localStorage.getItem(DRAFT_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    return (parsed && typeof parsed.dayIndex === "number") ? parsed : null;
+    return (parsed && typeof parsed.dayIndex === "number" && typeof parsed.planId === "string") ? parsed : null;
   } catch (e) {
     return null;
   }
 }
 
+function startWorkout(planId, dayIndex) {
+  draft = { planId, dayIndex, date: todayISO(), deloadOverride: null, weights: {}, sets: {}, editingSessionId: null };
+  deloadOverride = null;
+  localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+  render();
+}
+
 function saveDraft() {
-  if (!plan || activeTab !== "today") return;
-  const dayIndex = nextDayIndex();
-  const day = plan.days[dayIndex];
+  if (!draft || activeTab !== "workout") return;
+  const entry = findLibraryEntry(draft.planId);
+  const day = entry ? entry.plan.days[draft.dayIndex] : null;
+  if (!day) return;
   const weights = {};
   const sets = {};
   day.exercises.forEach(ex => {
@@ -122,7 +149,9 @@ function saveDraft() {
     const setInputs = Array.from(document.querySelectorAll(`.set-input[data-ex="${ex.id}"]`));
     sets[ex.id] = setInputs.map(inp => inp.value);
   });
-  draft = { dayIndex, date: todayISO(), deloadOverride, weights, sets };
+  draft.weights = weights;
+  draft.sets = sets;
+  draft.deloadOverride = deloadOverride;
   localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
 }
 
@@ -131,8 +160,8 @@ function clearDraft() {
   localStorage.removeItem(DRAFT_KEY);
 }
 
-function restoreDraftIntoToday() {
-  if (!draft || draft.dayIndex !== nextDayIndex()) return;
+function restoreDraftIntoWorkout() {
+  if (!draft) return;
   Object.entries(draft.weights || {}).forEach(([exId, val]) => {
     if (!val) return;
     const input = document.getElementById(`w_${exId}`);
@@ -151,7 +180,7 @@ function restoreDraftIntoToday() {
 }
 
 let draft = loadDraft();
-if (plan && draft && draft.dayIndex === nextDayIndex() && typeof draft.deloadOverride === "boolean") {
+if (draft && typeof draft.deloadOverride === "boolean") {
   deloadOverride = draft.deloadOverride;
 }
 
@@ -171,11 +200,6 @@ function isLastWeekOfMonth(iso) {
   const [y, m, d] = iso.split("-").map(Number);
   const lastDay = new Date(y, m, 0).getDate();
   return d > lastDay - 7;
-}
-
-function nextDayIndex() {
-  if (!plan || plan.days.length === 0) return 0;
-  return (state.lastDayIndex + 1) % plan.days.length;
 }
 
 function roundToIncrement(value) {
@@ -356,29 +380,35 @@ document.addEventListener("visibilitychange", () => {
 const appEl = document.getElementById("app");
 const tabbarEl = document.getElementById("tabbar");
 
+function setActiveTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll(".tab-btn").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
+  render();
+}
+
 function render() {
-  if (!plan) {
+  if (library.length === 0) {
     tabbarEl.style.display = "none";
     appEl.innerHTML = renderOnboarding();
-    attachOnboardingHandlers();
+    attachImportFormHandlers();
     return;
   }
   tabbarEl.style.display = "";
-  if (activeTab === "today") appEl.innerHTML = renderToday();
+  if (activeTab === "workout") appEl.innerHTML = renderWorkoutTab();
+  else if (activeTab === "library") appEl.innerHTML = renderLibraryTab();
   else if (activeTab === "history") appEl.innerHTML = renderHistory();
   else appEl.innerHTML = renderSettings();
   attachHandlers();
-  if (activeTab === "today") restoreDraftIntoToday();
+  if (activeTab === "workout" && draft) restoreDraftIntoWorkout();
 }
 
 function unitLabel() { return state.unit; }
 
-function renderOnboarding() {
+function renderImportForm(heading, intro) {
   return `
-    <div class="page-header"><h1>Lift Log</h1></div>
     <div class="card">
-      <h3>Load a plan to get started</h3>
-      <p>This app doesn't come with a workout plan built in — you bring your own as a JSON file. Import one below, or load the sample to see how it works.</p>
+      <h3>${heading}</h3>
+      ${intro ? `<p>${intro}</p>` : ""}
       <label class="btn secondary" style="display:block;text-align:center;margin-bottom:8px;cursor:pointer;">
         Choose plan file&hellip;
         <input type="file" accept="application/json,.json" id="planFileInput" style="display:none;" />
@@ -391,22 +421,71 @@ function renderOnboarding() {
       <summary>Plan file format</summary>
       <p>A plan is a JSON file shaped roughly like this:</p>
       <pre style="white-space:pre-wrap;font-size:11px;color:var(--text-dim);background:var(--bg-elev-2);padding:10px;border-radius:8px;overflow-x:auto;">${JSON.stringify(FORMAT_EXAMPLE, null, 2)}</pre>
-      <p>Only <code>days</code> is required (each with a <code>label</code> and at least one exercise). Exercise <code>type</code> is <code>weight</code> (default), <code>time</code> (bodyweight, log seconds), or <code>carry</code> (loaded, log distance). <code>id</code> must be unique and stable — it's how the app tracks progression across sessions. See <code>sample-plan.json</code> in the repo for a full example.</p>
+      <p>Only <code>days</code> is required (each with a <code>label</code> and at least one exercise). Exercise <code>type</code> is <code>weight</code> (default), <code>time</code> (bodyweight, log seconds), or <code>carry</code> (loaded, log distance). <code>id</code> must be unique and stable within this plan — it's how the app tracks progression across sessions. See <code>sample-plan.json</code> in the repo for a full example.</p>
     </details>
   `;
 }
 
-function renderToday() {
-  const dayIndex = nextDayIndex();
-  const day = plan.days[dayIndex];
+function renderOnboarding() {
+  return `
+    <div class="page-header"><h1>Lift Log</h1></div>
+    ${renderImportForm(
+      "Load a plan to get started",
+      "This app doesn't come with a workout plan built in — you bring your own as a JSON file. Import one below, or load the sample to see how it works."
+    )}
+  `;
+}
+
+function renderPicker() {
+  const active = library.filter(e => !e.archived);
+  if (active.length === 0) {
+    return `
+      <div class="page-header"><h1>Start a workout</h1></div>
+      <div class="empty-state">No active plans.<br/>Add or restore one from the Library tab.</div>
+    `;
+  }
+  const cardsHtml = active.map(entry => `
+    <div class="card">
+      <h3>${entry.name}</h3>
+      <p style="color:var(--text-dim);font-size:13px;margin:0 0 10px;">${entry.plan.days.length} day${entry.plan.days.length === 1 ? "" : "s"}</p>
+      <div class="day-pick-list">
+        ${entry.plan.days.map((d, i) => {
+          const isLast = state.lastWorkout && state.lastWorkout.planId === entry.id && state.lastWorkout.dayIndex === i;
+          return `<button class="btn secondary day-pick-btn${isLast ? " active" : ""}" type="button" data-plan="${entry.id}" data-day="${i}" style="margin-bottom:8px;">${d.label}</button>`;
+        }).join("")}
+      </div>
+    </div>
+  `).join("");
+  return `
+    <div class="page-header"><h1>Start a workout</h1></div>
+    ${cardsHtml}
+  `;
+}
+
+function renderWorkoutTab() {
+  if (!draft) return renderPicker();
+  const entry = findLibraryEntry(draft.planId);
+  const day = entry ? entry.plan.days[draft.dayIndex] : null;
+  if (!entry || !day) {
+    return `
+      <div class="page-header"><h1>Workout</h1></div>
+      <div class="empty-state">That workout's plan isn't available anymore.<br/>Pick something else below.</div>
+      ${renderPicker()}
+    `;
+  }
+  return renderActiveWorkout(entry, day);
+}
+
+function renderActiveWorkout(entry, day) {
   const iso = todayISO();
   const autoDeload = isLastWeekOfMonth(iso);
   const deload = deloadOverride === null ? autoDeload : deloadOverride;
+  const isEditing = !!draft.editingSessionId;
 
-  const warmupHtml = (plan.warmup && plan.warmup.length) ? `
+  const warmupHtml = (entry.plan.warmup && entry.plan.warmup.length) ? `
     <details class="card">
       <summary>Warm-up</summary>
-      <ul>${plan.warmup.map(w => `<li>${w}</li>`).join("")}</ul>
+      <ul>${entry.plan.warmup.map(w => `<li>${w}</li>`).join("")}</ul>
     </details>` : "";
 
   const deloadHtml = `
@@ -421,28 +500,39 @@ function renderToday() {
       </label>
     </div>`;
 
-  const exercisesHtml = day.exercises.map(ex => renderExerciseCard(ex, deload)).join("");
+  const editingBannerHtml = isEditing ? `
+    <div class="card" style="border-color:var(--warn);">
+      <strong style="color:var(--warn);">Editing a past session</strong>
+      <p style="margin:6px 0 0;">Saving corrects that session's logged numbers and its weight suggestion. If a later session already built on top of it, the suggestion may not fully re-thread.</p>
+      <button class="btn secondary" id="cancelEditBtn" type="button" style="margin-top:10px;">Cancel edit</button>
+    </div>` : "";
+
+  const exercisesHtml = day.exercises.map(ex => renderExerciseCard(ex, deload, entry)).join("");
 
   return `
     <div class="page-header">
       <h1>${day.label}</h1>
       <span class="date">${formatDateNice(iso)}</span>
     </div>
+    <p style="color:var(--text-dim);font-size:13px;margin:-10px 0 14px;">${entry.name}</p>
+    ${editingBannerHtml}
     ${warmupHtml}
     ${deloadHtml}
     <div id="exerciseList">${exercisesHtml}</div>
     <div class="finish-bar">
-      <button class="btn" id="finishBtn" type="button">Finish Session</button>
+      <button class="btn secondary" id="switchWorkoutBtn" type="button" style="margin-bottom:10px;">Switch workout</button>
+      <button class="btn" id="finishBtn" type="button">${isEditing ? "Save Changes" : "Finish Session"}</button>
     </div>
   `;
 }
 
-function renderExerciseCard(ex, deload) {
-  const st = state.exerciseState[ex.id] || { nextWeight: null, missStreak: 0 };
+function renderExerciseCard(ex, deload, entry) {
+  const stateKey = `${entry.id}:${ex.id}`;
+  const st = state.exerciseState[stateKey] || { nextWeight: null, missStreak: 0 };
   let suggested = st.nextWeight;
   if (suggested != null && deload) suggested = roundToIncrement(suggested * 0.5);
 
-  const exerciseNotes = plan.exerciseNotes || {};
+  const exerciseNotes = entry.plan.exerciseNotes || {};
   const noteExtra = exerciseNotes[ex.name] ? `<div class="ex-note">${exerciseNotes[ex.name]}</div>` : "";
   const watchExtra = ex.watch ? `<div class="ex-watch">${ex.watchNote || "Recurring discomfort here → get it looked at. Not a programming fix."}</div>` : "";
 
@@ -496,11 +586,65 @@ function renderExerciseCard(ex, deload) {
   `;
 }
 
+function renderLibraryTab() {
+  const active = library.filter(e => !e.archived);
+  const archived = library.filter(e => e.archived);
+
+  const planDetailsHtml = (entry) => {
+    const p = entry.plan;
+    const sections = [];
+    if (p.progressionRule && p.progressionRule.length) {
+      sections.push(`<details><summary>Progression rule</summary><ul>${p.progressionRule.map(x => `<li>${x}</li>`).join("")}</ul></details>`);
+    }
+    if (p.deloadNote || p.scheduleNote || p.cardioNote) {
+      sections.push(`<details><summary>Deload &amp; schedule</summary>${p.deloadNote ? `<p>${p.deloadNote}</p>` : ""}${p.scheduleNote ? `<p>${p.scheduleNote}</p>` : ""}${p.cardioNote ? `<p>${p.cardioNote}</p>` : ""}</details>`);
+    }
+    if (p.watchList && p.watchList.length) {
+      sections.push(`<details><summary>Watch list</summary><ul>${p.watchList.map(x => `<li>${x}</li>`).join("")}</ul></details>`);
+    }
+    if (p.exerciseNotes && Object.keys(p.exerciseNotes).length) {
+      sections.push(`<details><summary>Exercise cues</summary><ul>${Object.entries(p.exerciseNotes).map(([k, v]) => `<li><strong>${k}</strong> — ${v}</li>`).join("")}</ul></details>`);
+    }
+    return sections.join("");
+  };
+
+  const activeCardsHtml = active.map(entry => `
+    <div class="card settings-group">
+      <h3>${entry.name}</h3>
+      <p style="color:var(--text-dim);font-size:13px;margin:0 0 10px;">${entry.plan.days.length} day${entry.plan.days.length === 1 ? "" : "s"}</p>
+      ${planDetailsHtml(entry)}
+      <button class="btn secondary" data-export-plan="${entry.id}" type="button" style="margin-top:10px;margin-bottom:8px;">Export</button>
+      <button class="btn danger" data-archive-plan="${entry.id}" type="button">Archive</button>
+    </div>
+  `).join("");
+
+  const archivedHtml = archived.length ? `
+    <details class="card">
+      <summary>Archived plans (${archived.length})</summary>
+      ${archived.map(entry => `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--border);">
+          <span>${entry.name}</span>
+          <span style="display:flex;gap:6px;flex:none;">
+            <button class="btn secondary" data-restore-plan="${entry.id}" type="button" style="display:inline-block;width:auto;padding:6px 10px;font-size:12px;">Restore</button>
+            <button class="btn danger" data-purge-plan="${entry.id}" type="button" style="display:inline-block;width:auto;padding:6px 10px;font-size:12px;">Delete permanently</button>
+          </span>
+        </div>
+      `).join("")}
+    </details>` : "";
+
+  return `
+    <div class="page-header"><h1>Library</h1><span class="date">${active.length} plan${active.length === 1 ? "" : "s"}</span></div>
+    ${activeCardsHtml}
+    ${renderImportForm("Import a plan")}
+    ${archivedHtml}
+  `;
+}
+
 function renderHistory() {
   if (state.sessions.length === 0) {
     return `
       <div class="page-header"><h1>History</h1></div>
-      <div class="empty-state">No sessions logged yet.<br/>Finish a workout on the Today tab and it'll show up here.</div>
+      <div class="empty-state">No sessions logged yet.<br/>Finish a workout on the Workout tab and it'll show up here.</div>
     `;
   }
   const items = state.sessions.map((s, idx) => {
@@ -515,12 +659,13 @@ function renderHistory() {
     return `
       <details class="session-item">
         <summary>
-          <span class="session-title">${s.dayLabel}${s.deload ? '<span class="badge-deload">DELOAD</span>' : ""}</span>
+          <span class="session-title">${s.planName ? s.planName + " — " : ""}${s.dayLabel}${s.deload ? '<span class="badge-deload">DELOAD</span>' : ""}</span>
           <span class="session-sub">${formatDateNice(s.date)}</span>
         </summary>
         <div class="session-detail">
           ${rows}
-          <button class="btn danger" style="margin-top:10px;padding:8px;font-size:13px;" data-delete-session="${idx}" type="button">Delete session</button>
+          <button class="btn secondary" style="margin-top:10px;padding:8px;font-size:13px;" data-edit-session="${idx}" type="button">Edit</button>
+          <button class="btn danger" style="margin-top:8px;padding:8px;font-size:13px;" data-delete-session="${idx}" type="button">Delete session</button>
         </div>
       </details>`;
   }).join("");
@@ -531,16 +676,8 @@ function renderHistory() {
 }
 
 function renderSettings() {
-  const dayCount = plan.days.length;
   return `
-    <div class="page-header"><h1>Plan &amp; Settings</h1></div>
-
-    <div class="card settings-group">
-      <h3>${plan.name || "Untitled plan"}</h3>
-      <p style="color:var(--text-dim);font-size:13px;margin:0 0 10px;">${dayCount} day${dayCount === 1 ? "" : "s"} in rotation.</p>
-      <button class="btn secondary" id="exportPlanBtn" type="button" style="margin-bottom:8px;">Export current plan</button>
-      <button class="btn danger" id="replacePlanBtn" type="button">Replace plan</button>
-    </div>
+    <div class="page-header"><h1>Settings</h1></div>
 
     <div class="card settings-group">
       <div class="settings-row">
@@ -556,35 +693,9 @@ function renderSettings() {
       </div>
     </div>
 
-    ${plan.progressionRule && plan.progressionRule.length ? `
-    <details class="card">
-      <summary>Progression rule</summary>
-      <ul>${plan.progressionRule.map(x => `<li>${x}</li>`).join("")}</ul>
-    </details>` : ""}
-
-    ${(plan.deloadNote || plan.scheduleNote || plan.cardioNote) ? `
-    <details class="card">
-      <summary>Deload &amp; schedule</summary>
-      ${plan.deloadNote ? `<p>${plan.deloadNote}</p>` : ""}
-      ${plan.scheduleNote ? `<p>${plan.scheduleNote}</p>` : ""}
-      ${plan.cardioNote ? `<p>${plan.cardioNote}</p>` : ""}
-    </details>` : ""}
-
-    ${plan.watchList && plan.watchList.length ? `
-    <details class="card">
-      <summary>Watch list</summary>
-      <ul>${plan.watchList.map(x => `<li>${x}</li>`).join("")}</ul>
-    </details>` : ""}
-
-    ${plan.exerciseNotes && Object.keys(plan.exerciseNotes).length ? `
-    <details class="card">
-      <summary>Exercise cues</summary>
-      <ul>${Object.entries(plan.exerciseNotes).map(([k, v]) => `<li><strong>${k}</strong> — ${v}</li>`).join("")}</ul>
-    </details>` : ""}
-
     <div class="card settings-group">
       <h3>Data</h3>
-      <p style="color:var(--text-dim);font-size:13px;margin:0 0 10px;">Everything is stored on this device only.</p>
+      <p style="color:var(--text-dim);font-size:13px;margin:0 0 10px;">Everything is stored on this device only. Export includes your whole plan library.</p>
       <button class="btn secondary" id="exportBtn" type="button" style="margin-bottom:8px;">Export data</button>
       <textarea class="data-box" id="importBox" placeholder="Paste exported JSON here to restore..."></textarea>
       <button class="btn secondary" id="importBtn" type="button" style="margin-top:8px;margin-bottom:8px;">Import data</button>
@@ -603,13 +714,23 @@ function evaluateSet(actual, low, high) {
 }
 
 function finishSession() {
-  const dayIndex = nextDayIndex();
-  const day = plan.days[dayIndex];
+  if (!draft) return;
+  const entry = findLibraryEntry(draft.planId);
+  const day = entry ? entry.plan.days[draft.dayIndex] : null;
+  if (!entry || !day) {
+    alert("This workout's plan isn't available anymore.");
+    return;
+  }
+
   const iso = todayISO();
   const deload = deloadOverride === null ? isLastWeekOfMonth(iso) : deloadOverride;
+  const editingId = draft.editingSessionId || null;
+  const existingIdx = editingId ? state.sessions.findIndex(s => s.sessionId === editingId) : -1;
 
-  const loggedExercises = [];
-
+  // First pass: validate + compute what would be logged, without mutating any
+  // shared state yet (so a bail-out on "nothing entered" leaves everything
+  // exactly as it was, including any session being edited).
+  const computed = [];
   day.exercises.forEach(ex => {
     const weightInput = document.getElementById(`w_${ex.id}`);
     const weightVal = weightInput ? weightInput.value : "";
@@ -622,18 +743,39 @@ function finishSession() {
     const enteredResults = results.filter(r => r !== null);
     const allTop = enteredResults.length > 0 && enteredResults.every(r => r === "top");
     const missedBottom = enteredResults.some(r => r === "miss");
-
     const weightNum = weightVal !== "" ? Number(weightVal) : null;
 
-    loggedExercises.push({
-      id: ex.id,
-      name: ex.name,
-      weight: weightNum,
+    computed.push({
+      ex, weightNum, allTop, missedBottom,
       sets: setVals.map((v, i) => v === "" ? ex.repHigh : Number(v)),
     });
+  });
 
+  if (computed.length === 0) {
+    alert("Log at least one exercise before finishing.");
+    return;
+  }
+
+  // Now safe to mutate. If re-finishing an edited session, undo the
+  // progression effect its original finish applied, so redoing it below
+  // doesn't double-count.
+  if (existingIdx !== -1 && state.sessions[existingIdx].priorExerciseState) {
+    Object.entries(state.sessions[existingIdx].priorExerciseState).forEach(([key, prev]) => {
+      if (prev == null) delete state.exerciseState[key];
+      else state.exerciseState[key] = prev;
+    });
+  }
+
+  const loggedExercises = [];
+  const priorExerciseState = {};
+
+  computed.forEach(({ ex, weightNum, allTop, missedBottom, sets }) => {
+    loggedExercises.push({ id: ex.id, name: ex.name, weight: weightNum, sets });
+
+    const stateKey = `${entry.id}:${ex.id}`;
     if (!deload && weightNum != null) {
-      const prevState = state.exerciseState[ex.id] || { nextWeight: null, missStreak: 0 };
+      priorExerciseState[stateKey] = state.exerciseState[stateKey] || null;
+      const prevState = state.exerciseState[stateKey] || { nextWeight: null, missStreak: 0 };
       let nextWeight = weightNum;
       let missStreak = prevState.missStreak || 0;
 
@@ -653,32 +795,65 @@ function finishSession() {
         missStreak = 0;
       }
 
-      state.exerciseState[ex.id] = { nextWeight, missStreak, lastActualWeight: weightNum };
+      state.exerciseState[stateKey] = { nextWeight, missStreak, lastActualWeight: weightNum };
     }
   });
 
-  if (loggedExercises.length === 0) {
-    alert("Log at least one exercise before finishing.");
-    return;
-  }
-
-  state.sessions.unshift({
-    date: iso,
-    dayIndex,
+  const sessionRecord = {
+    sessionId: editingId || genId(),
+    date: existingIdx !== -1 ? state.sessions[existingIdx].date : iso,
+    planId: entry.id,
+    planName: entry.name || entry.plan.name || "Plan",
+    dayIndex: draft.dayIndex,
     dayLabel: day.label,
     deload,
     unit: state.unit,
     exercises: loggedExercises,
-  });
-  state.lastDayIndex = dayIndex;
+    priorExerciseState,
+  };
+
+  if (existingIdx !== -1) state.sessions[existingIdx] = sessionRecord;
+  else state.sessions.unshift(sessionRecord);
+
+  state.lastWorkout = { planId: entry.id, dayIndex: draft.dayIndex };
   deloadOverride = null;
   clearDraft();
   saveState();
   render();
 }
 
+function editSession(idx) {
+  const s = state.sessions[idx];
+  if (!s) return;
+  const entry = findLibraryEntry(s.planId);
+  const day = entry ? entry.plan.days[s.dayIndex] : null;
+  if (!entry || !day) {
+    alert("This session's plan isn't available anymore, so it can't be reopened for editing.");
+    return;
+  }
+  if (draft && !confirm("You have a workout in progress. Discard it and reopen this session instead?")) return;
+
+  const weights = {};
+  const sets = {};
+  s.exercises.forEach(e => {
+    weights[e.id] = e.weight != null ? String(e.weight) : "";
+    sets[e.id] = e.sets.map(v => String(v));
+  });
+  draft = {
+    planId: s.planId,
+    dayIndex: s.dayIndex,
+    date: s.date,
+    deloadOverride: s.deload,
+    weights, sets,
+    editingSessionId: s.sessionId,
+  };
+  deloadOverride = s.deload;
+  localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+  setActiveTab("workout");
+}
+
 // ---------- Event handling ----------
-function attachOnboardingHandlers() {
+function attachImportFormHandlers() {
   const fileInput = document.getElementById("planFileInput");
   if (fileInput) {
     fileInput.addEventListener("change", (e) => {
@@ -704,10 +879,9 @@ function attachOnboardingHandlers() {
       fetch("sample-plan.json")
         .then(r => r.json())
         .then(p => {
-          plan = p;
-          savePlan();
-          clearDraft();
-          activeTab = "today";
+          if (!validatePlan(p)) { alert("Sample plan failed to load correctly."); return; }
+          addPlanToLibrary(p);
+          activeTab = library.length === 1 ? "workout" : "library";
           render();
         })
         .catch(() => alert("Couldn't load the sample plan."));
@@ -727,14 +901,14 @@ function tryImportPlan(text) {
     alert('That JSON isn\'t shaped like a plan — it needs a "days" array, each with a label and at least one exercise.');
     return;
   }
-  plan = parsed;
-  savePlan();
-  clearDraft();
-  activeTab = "today";
+  addPlanToLibrary(parsed);
+  activeTab = library.length === 1 ? "workout" : "library";
   render();
 }
 
 function attachHandlers() {
+  attachImportFormHandlers();
+
   document.querySelectorAll(".set-input").forEach(inp => {
     inp.addEventListener("input", () => {
       const low = Number(inp.dataset.low);
@@ -751,6 +925,12 @@ function attachHandlers() {
 
   document.querySelectorAll(".weight-input").forEach(inp => {
     inp.addEventListener("input", saveDraft);
+  });
+
+  document.querySelectorAll(".day-pick-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      startWorkout(btn.dataset.plan, Number(btn.dataset.day));
+    });
   });
 
   document.querySelectorAll("[data-rest]").forEach(btn => {
@@ -774,8 +954,36 @@ function attachHandlers() {
     });
   }
 
+  const switchWorkoutBtn = document.getElementById("switchWorkoutBtn");
+  if (switchWorkoutBtn) {
+    switchWorkoutBtn.addEventListener("click", () => {
+      if (confirm("Discard this in-progress workout and pick a different one?")) {
+        clearDraft();
+        deloadOverride = null;
+        render();
+      }
+    });
+  }
+
+  const cancelEditBtn = document.getElementById("cancelEditBtn");
+  if (cancelEditBtn) {
+    cancelEditBtn.addEventListener("click", () => {
+      if (confirm("Discard these edits? The session keeps its original logged numbers.")) {
+        clearDraft();
+        deloadOverride = null;
+        setActiveTab("history");
+      }
+    });
+  }
+
   const finishBtn = document.getElementById("finishBtn");
   if (finishBtn) finishBtn.addEventListener("click", finishSession);
+
+  document.querySelectorAll("[data-edit-session]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      editSession(Number(btn.dataset.editSession));
+    });
+  });
 
   document.querySelectorAll("[data-delete-session]").forEach(btn => {
     btn.addEventListener("click", (e) => {
@@ -785,6 +993,52 @@ function attachHandlers() {
         state.sessions.splice(idx, 1);
         saveState();
         render();
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-archive-plan]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const entry = findLibraryEntry(btn.dataset.archivePlan);
+      if (entry && confirm(`Archive "${entry.name}"? It'll drop off your active list but stays in History and can be restored anytime.`)) {
+        entry.archived = true;
+        saveLibrary();
+        render();
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-restore-plan]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const entry = findLibraryEntry(btn.dataset.restorePlan);
+      if (entry) {
+        entry.archived = false;
+        saveLibrary();
+        render();
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-purge-plan]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const entry = findLibraryEntry(btn.dataset.purgePlan);
+      if (entry && confirm(`Permanently delete "${entry.name}"? This can't be undone. Past sessions logged against it stay in History.`)) {
+        library = library.filter(e => e.id !== entry.id);
+        saveLibrary();
+        render();
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-export-plan]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const entry = findLibraryEntry(btn.dataset.exportPlan);
+      if (!entry) return;
+      const data = JSON.stringify(entry.plan, null, 2);
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(data).then(() => alert("Plan JSON copied to clipboard.")).catch(() => prompt("Copy your plan JSON:", data));
+      } else {
+        prompt("Copy your plan JSON:", data);
       }
     });
   });
@@ -811,7 +1065,7 @@ function attachHandlers() {
   const exportBtn = document.getElementById("exportBtn");
   if (exportBtn) {
     exportBtn.addEventListener("click", () => {
-      const data = JSON.stringify(state, null, 2);
+      const data = JSON.stringify({ state, library }, null, 2);
       const box = document.getElementById("importBox");
       box.value = data;
       box.select();
@@ -827,7 +1081,14 @@ function attachHandlers() {
       const box = document.getElementById("importBox");
       try {
         const parsed = JSON.parse(box.value);
-        state = Object.assign(defaultState(), parsed);
+        if (parsed && typeof parsed === "object" && Array.isArray(parsed.library) && parsed.state) {
+          state = Object.assign(defaultState(), parsed.state);
+          library = parsed.library.filter(e => e && e.id && validatePlan(e.plan));
+          saveLibrary();
+        } else {
+          state = Object.assign(defaultState(), parsed);
+        }
+        clearDraft();
         saveState();
         alert("Data imported.");
         render();
@@ -840,33 +1101,10 @@ function attachHandlers() {
   const resetBtn = document.getElementById("resetBtn");
   if (resetBtn) {
     resetBtn.addEventListener("click", () => {
-      if (confirm("This deletes all logged sessions and progression data on this device. Continue?")) {
+      if (confirm("This deletes all logged sessions and progression data on this device. Your plan library is kept. Continue?")) {
         state = defaultState();
         clearDraft();
         saveState();
-        render();
-      }
-    });
-  }
-
-  const exportPlanBtn = document.getElementById("exportPlanBtn");
-  if (exportPlanBtn) {
-    exportPlanBtn.addEventListener("click", () => {
-      const data = JSON.stringify(plan, null, 2);
-      if (navigator.clipboard) {
-        navigator.clipboard.writeText(data).then(() => alert("Plan JSON copied to clipboard.")).catch(() => prompt("Copy your plan JSON:", data));
-      } else {
-        prompt("Copy your plan JSON:", data);
-      }
-    });
-  }
-
-  const replacePlanBtn = document.getElementById("replacePlanBtn");
-  if (replacePlanBtn) {
-    replacePlanBtn.addEventListener("click", () => {
-      if (confirm("Replace the current plan? Your logged history stays, but progression suggestions reset for any exercises not in the new plan.")) {
-        plan = null;
-        savePlan();
         render();
       }
     });
@@ -876,9 +1114,7 @@ function attachHandlers() {
 document.getElementById("tabbar").addEventListener("click", (e) => {
   const btn = e.target.closest(".tab-btn");
   if (!btn) return;
-  activeTab = btn.dataset.tab;
-  document.querySelectorAll(".tab-btn").forEach(b => b.classList.toggle("active", b === btn));
-  render();
+  setActiveTab(btn.dataset.tab);
 });
 
 render();
